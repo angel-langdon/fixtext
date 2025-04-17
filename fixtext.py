@@ -24,6 +24,12 @@ valle_inclan = f"""{cult}
 non_sense = f"""{cult}
 - Haz un juego de palabras y cambia el significado de la frase para que no tenga ningún sentido lógico pero sí que esté bien escrito"""
 
+formal_english = """I want you to modify the final text based on the following guidelines:
+- Simplify and correct errors when necessary.
+- Limit yourself to modifying the text, do not add explanations, comments or quotation marks.
+- Make the message well written and easy to understand
+- Make the message formal but do not overdo it."""
+
 
 def get_modified_text(text: str, system_content: str) -> str:
     body = {
@@ -41,13 +47,16 @@ def get_modified_text(text: str, system_content: str) -> str:
 
 
 formats = {
+    "0": formal_english,
     "1": formal,
     "2": cult,
     "3": valle_inclan,
     "4": non_sense,
 }
 
-msg = """1. Formal
+msg = """
+0. Formal English
+1. Formal
 2. Cult
 3. Valle Inclán
 4. Non sense\n"""
