@@ -1,10 +1,8 @@
-import time
 from msvcrt import getch
+from typing import TypedDict
 
 import pyperclip
 import requests
-
-start = time.monotonic()
 
 _common = """Quiero modifiques el texto final en base a las siguientes pautas:
 - Simplifica y corrige errores cuando sea necesario.
@@ -46,26 +44,28 @@ def get_modified_text(text: str, system_content: str) -> str:
     return r.content.decode()
 
 
-formats = {
-    "0": formal_english,
-    "1": formal,
-    "2": cult,
-    "3": valle_inclan,
-    "4": non_sense,
-}
+class Format(TypedDict):
+    system_content: str
+    desc: str
 
-msg = """
-0. Formal English
-1. Formal
-2. Cult
-3. Valle Inclán
-4. Non sense\n"""
+
+formats: list[Format] = [
+    {"system_content": formal_english, "desc": "Formal English"},
+    {"system_content": formal, "desc": "Formal"},
+    {"system_content": cult, "desc": "Cult"},
+    {"system_content": valle_inclan, "desc": "Valle Inclán"},
+    {"system_content": non_sense, "desc": "Non sense"},
+]
+
+msg = "\n".join(f"{i}. {dic['desc']}" for i, dic in enumerate(formats)) + "\n"
 
 if __name__ == "__main__":
     print(msg)
     print("Number format to use: ")
     n = getch().decode()
     print(n)
-    clipboard_text = pyperclip.paste()
-    modified_text = get_modified_text(clipboard_text, formats[n])
+    text = pyperclip.paste()
+    i = int(n)
+    system_content = formats[i]["system_content"]
+    modified_text = get_modified_text(text, system_content)
     pyperclip.copy(modified_text)
