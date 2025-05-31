@@ -17,6 +17,7 @@ FixText is a command-line tool that takes text from your clipboard, transforms i
 ## Requirements
 
 - uv
+- A free tier GEMINI API KEY [from Google AI Studio](https://aistudio.google.com/apikey) inside `.env` file. `GEMINI_API_KEY=...`
 
 ## Usage
 
