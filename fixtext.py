@@ -1,8 +1,21 @@
+import os
 from msvcrt import getch
-from typing import TypedDict
 
 import pyperclip
-import requests
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+from pydantic import BaseModel
+
+load_dotenv()
+
+
+class Format(BaseModel):
+    system_instructions: str
+    desc: str
+
+
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 _common = """Quiero modifiques el texto final en base a las siguientes pautas:
 - Simplifica y corrige errores cuando sea necesario.
@@ -22,42 +35,54 @@ valle_inclan = f"""{cult}
 non_sense = f"""{cult}
 - Haz un juego de palabras y cambia el significado de la frase para que no tenga ningún sentido lógico pero sí que esté bien escrito"""
 
-formal_english = """I want you to modify the final text based on the following guidelines:
-- Simplify and correct errors when necessary.
-- Limit yourself to modifying the text, do not add explanations, comments or quotation marks.
-- Make the message well written and easy to understand
-- Make the message formal but do not overdo it."""
+formal_english = f"""{formal}
+- Answer in English"""
 
 
-def get_modified_text(text: str, system_content: str) -> str:
-    body = {
-        "messages": [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": text},
+def gemini_completion(prompt: str, system_instructions: str):
+    client = genai.Client(
+        api_key=GEMINI_API_KEY,
+    )
+
+    model = "gemini-2.5-flash-preview-05-20"
+    contents = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(text=prompt),
+            ],
+        ),
+    ]
+    generate_content_config = types.GenerateContentConfig(
+        response_mime_type="text/plain",
+        system_instruction=[
+            types.Part.from_text(text=system_instructions),
         ],
-        "model": "openai-large",
-        "seed": 42,
-        "jsonMode": False,
-        "private": True,
-    }
-    r = requests.post("https://text.pollinations.ai/", json=body)
-    return r.content.decode()
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
 
-
-class Format(TypedDict):
-    system_content: str
-    desc: str
+    chunks: list[str] = []
+    for chunk in client.models.generate_content_stream(
+        model=model,
+        contents=contents,
+        config=generate_content_config,
+    ):
+        if chunk.text is None:
+            continue
+        chunks.append(chunk.text)
+        print(chunk.text, end="")
+    return "".join(chunks)
 
 
 formats: list[Format] = [
-    {"system_content": formal_english, "desc": "Formal English"},
-    {"system_content": formal, "desc": "Formal"},
-    {"system_content": cult, "desc": "Cult"},
-    {"system_content": valle_inclan, "desc": "Valle Inclán"},
-    {"system_content": non_sense, "desc": "Non sense"},
+    Format(system_instructions=formal_english, desc="Formal English"),
+    Format(system_instructions=formal, desc="Formal"),
+    Format(system_instructions=cult, desc="Cult"),
+    Format(system_instructions=valle_inclan, desc="Valle Inclán"),
+    Format(system_instructions=non_sense, desc="Non sense"),
 ]
 
-msg = "\n".join(f"{i}. {dic['desc']}" for i, dic in enumerate(formats)) + "\n"
+msg = "\n".join(f"{i}. {f.desc}" for i, f in enumerate(formats)) + "\n"
 
 if __name__ == "__main__":
     print(msg)
@@ -66,6 +91,6 @@ if __name__ == "__main__":
     print(n)
     text = pyperclip.paste()
     i = int(n)
-    system_content = formats[i]["system_content"]
-    modified_text = get_modified_text(text, system_content)
+    f = formats[i]
+    modified_text = gemini_completion(text, f.system_instructions)
     pyperclip.copy(modified_text)
