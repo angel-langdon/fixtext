@@ -9,7 +9,8 @@ class Format(BaseModel):
 _common = """Quiero modifiques el texto final en base a las siguientes pautas:
 - Simplifica y corrige errores cuando sea necesario.
 - Responde en el mismo lenguaje del texto. En el caso que el texto esté en Español utiliza el dialecto Castellano de España.
-- Limítate a modificar el texto, no añadas explicaciones ni comentarios ni comillas."""
+- Limítate a modificar el texto, no añadas explicaciones ni comentarios ni comillas.
+- Utiliza texto plano, NO añadas carácteres de Markdown, tipo "*", "_", etc. SÍ que puedes añadir "-" para enumerar."""
 
 formal = f"""{_common}
 - Haz que el mensaje esté bien escrito y sea fácil de entender
