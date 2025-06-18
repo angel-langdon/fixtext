@@ -19,7 +19,7 @@ def gemini_completion(prompt: str, system_instructions: str):
         api_key=GEMINI_API_KEY,
     )
 
-    model = "gemini-2.5-flash-preview-05-20"
+    model = "gemini-2.5-flash"
     contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
     generate_content_config = types.GenerateContentConfig(
         response_mime_type="text/plain",
