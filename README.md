@@ -31,3 +31,5 @@ FixText is a command-line tool that takes text from your clipboard, transforms i
 ![PowerToys Keyboard Shortcut](img/powertoys-keyboard-shortcut.png)
 
 You can set up a keyboard shortcut using tools like PowerToys to quickly access FixText.
+
+Ubuntu keyboard shortcut `gnome-terminal -- bash -c 'cd ~/projects/fixtext && uv run fixtext.py'` on keyboard custom shortcuts.

@@ -1,5 +1,9 @@
 import os
-from msvcrt import getch
+try:
+    from msvcrt import getch
+    getch = lambda: getch().decode()
+except ImportError:
+    from getch import getch
 
 import pyperclip
 from dotenv import load_dotenv
@@ -45,7 +49,7 @@ msg = "\n".join(f"{i}. {f.title}" for i, f in enumerate(formats)) + "\n"
 if __name__ == "__main__":
     print(msg)
     print("Number format to use: ")
-    n = getch().decode()
+    n = getch()
     print(n)
     text = pyperclip.paste()
     i = int(n)
