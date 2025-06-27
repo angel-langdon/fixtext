@@ -1,7 +1,7 @@
 import os
 try:
-    from msvcrt import getch
-    getch = lambda: getch().decode()
+    from msvcrt import getch as windows_getch
+    getch = lambda: windows_getch().decode()
 except ImportError:
     from getch import getch
 

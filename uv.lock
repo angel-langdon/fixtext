@@ -83,7 +83,7 @@ name = "fixtext"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "getch" },
+    { name = "getch", marker = "sys_platform == 'linux'" },
     { name = "google-genai" },
     { name = "pyperclip" },
     { name = "python-dotenv" },
@@ -91,7 +91,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "getch", specifier = ">=1.0" },
+    { name = "getch", marker = "sys_platform == 'linux'", specifier = ">=1.0" },
     { name = "google-genai", specifier = ">=1.18.0" },
     { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "python-dotenv", specifier = ">=1.1.0" },

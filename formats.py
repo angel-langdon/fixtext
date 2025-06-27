@@ -29,9 +29,14 @@ non_sense = f"""{cult}
 formal_english = f"""{formal}
 - Answer in English"""
 
+fix_markdown = f"""Fix any errors in the Markdown formatting of the text
+Add proper headings, lists, and formatting (bold, italic, etc.) to make the text more readable and structured.
+Only return the modified Markdown text without any additional explanations or comments."""
+
 formats: list[Format] = [
     Format(title="Formal English", system_instructions=formal_english),
     Format(title="Fix", system_instructions=_common),
+    Format(title="Fix Markdown and format better", system_instructions=fix_markdown),
     Format(title="Formal", system_instructions=formal),
     Format(title="Cult", system_instructions=cult),
     Format(title="Valle Inclán", system_instructions=valle_inclan),
