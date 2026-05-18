@@ -1,35 +1,37 @@
 # FixText
 
-A simple Python utility to modify clipboard text using AI text transformations.
-
-## Description
-
-FixText is a command-line tool that takes text from your clipboard, transforms it according to selected style options, and places the modified text back in your clipboard.
+Native Windows tray utility that rewrites the current clipboard text with Gemini.
 
 ## Features
 
-- **Four text transformation styles:**
-  1. Formal - Clean, well-written, and formal language
-  2. Cult - Elevated, sophisticated language with complex vocabulary
-  3. Valle Inclán - Mimics the style of Spanish writer Valle Inclán
-  4. Non Sense - Creates playful, illogical word combinations
+- Always-on double-copy listener: press `Ctrl+C` twice quickly.
+- Windows tray menu for manual fixing, format selection, notification toggle, startup toggle, and exit.
+- Clipboard in, clipboard out.
+- Automatically pastes the rewritten text after updating the clipboard.
+- Tiny diagnostic log at `zig-out/bin/fixtext.log`.
+- Gemini API model: `gemini-3.1-flash-lite` with `thinkingLevel: "minimal"`.
+- API key loaded from `GEMINI_API_KEY` or a local `.env` file.
 
-## Requirements
+## Build
 
-- uv
-- A free tier GEMINI API KEY [from Google AI Studio](https://aistudio.google.com/apikey) inside `.env` file. `GEMINI_API_KEY=...`
+```powershell
+zig build -Doptimize=ReleaseSafe
+```
+
+The executable is created at `zig-out/bin/fixtext.exe`.
 
 ## Usage
 
-1. Copy text to your clipboard
-2. Run the script: `uv run fixtext.py`
-3. Select a formatting option
-4. The transformed text will be placed in your clipboard, ready to paste
+1. Set `GEMINI_API_KEY` in your environment or create `.env`:
 
-## Keyboard Shortcut (Optional)
+   ```text
+   GEMINI_API_KEY=your-key-here
+   ```
 
-![PowerToys Keyboard Shortcut](img/powertoys-keyboard-shortcut.png)
+2. Start `zig-out/bin/fixtext.exe`.
+3. Pick the active format from the tray menu.
+4. Select text, press `Ctrl+C` twice quickly, and FixText will rewrite the clipboard and paste it back.
 
-You can set up a keyboard shortcut using tools like PowerToys to quickly access FixText.
+Use the tray menu's `Show notifications` option to enable or disable FixText balloon notifications.
 
-Ubuntu keyboard shortcut `gnome-terminal -- bash -c 'cd ~/projects/fixtext && uv run fixtext.py'` on keyboard custom shortcuts.
+Use the tray menu's `Start with Windows` option to add or remove FixText from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
