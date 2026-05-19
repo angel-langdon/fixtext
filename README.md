@@ -1,37 +1,61 @@
 # FixText
 
-Native Windows tray utility that rewrites the current clipboard text with Gemini.
+Configurable Windows clipboard rewrite utility built with Tauri 2, Rust, React, TypeScript, Vite, and Bun.
 
 ## Features
 
-- Always-on double-copy listener: press `Ctrl+C` twice quickly.
-- Windows tray menu for manual fixing, format selection, notification toggle, startup toggle, and exit.
-- Clipboard in, clipboard out.
-- Automatically pastes the rewritten text after updating the clipboard.
-- Tiny diagnostic log at `zig-out/bin/fixtext.log`.
-- Gemini API model: `gemini-3.1-flash-lite` with `thinkingLevel: "minimal"`.
-- API key loaded from `GEMINI_API_KEY` or a local `.env` file.
+- Native Windows tray icon: double-click opens the frontend; the frontend owns app actions.
+- Editable Gemini model selection with free-tier defaults and a custom model id field.
+- Editable prompt profiles with add, duplicate, delete, and structured save.
+- Full app-state import/export JSON for settings, prompts, model choice, and API key.
+- Local persistent state in the OS app config directory, not in the repository.
+- Minimal dependencies: official Tauri/React/Vite scaffold, `windows-sys`, `serde`, and `serde_json`.
+
+## Development
+
+```powershell
+bun install
+bun run tauri dev
+```
+
+`localhost:1420` is only used by `tauri dev`. If you open the release executable directly, it should not need a localhost server.
 
 ## Build
 
+For the portable release executable:
+
 ```powershell
-zig build -Doptimize=ReleaseSafe
+bun run build:app
 ```
 
-The executable is created at `zig-out/bin/fixtext.exe`.
+This writes the standalone app to `src-tauri/target/release/fixtext.exe` and skips setup/MSI packaging.
 
-## Usage
+For a quick debug executable without installer packaging:
 
-1. Set `GEMINI_API_KEY` in your environment or create `.env`:
+```powershell
+bun run build:fast
+```
 
-   ```text
-   GEMINI_API_KEY=your-key-here
-   ```
+To build Windows installers:
 
-2. Start `zig-out/bin/fixtext.exe`.
-3. Pick the active format from the tray menu.
-4. Select text, press `Ctrl+C` twice quickly, and FixText will rewrite the clipboard and paste it back.
+```powershell
+bun run build:installer
+```
 
-Use the tray menu's `Show notifications` option to enable or disable FixText balloon notifications.
+To rebuild and launch that standalone executable:
 
-Use the tray menu's `Start with Windows` option to add or remove FixText from `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+```powershell
+bash brfast.sh
+```
+
+`brfast.sh` defaults to a debug-profile standalone executable for faster iteration. To force a release-profile executable:
+
+```powershell
+$env:BRFAST_MODE="release"; bash brfast.sh
+```
+
+Rust stable is used through `rustup`; update with:
+
+```powershell
+rustup update stable
+```
