@@ -9,6 +9,7 @@ Configurable Windows clipboard rewrite utility built with Tauri 2, Rust, React, 
 - Editable prompt profiles with add, duplicate, delete, and structured save.
 - Full app-state import/export JSON for settings, prompts, model choice, and API key.
 - Local persistent state in the OS app config directory, not in the repository.
+- Global shortcuts can fix the current clipboard, or use `Ctrl+Alt+C` to select all text in the active app, copy it, rewrite it, and paste the result back.
 - Minimal dependencies: official Tauri/React/Vite scaffold, `windows-sys`, `serde`, and `serde_json`.
 
 ## Development

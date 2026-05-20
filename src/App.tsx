@@ -383,8 +383,8 @@ function App() {
     }
   }
 
-  async function quitApp() {
-    await invoke("quit_app");
+  async function hideToTray() {
+    await invoke("hide_main_window");
   }
 
   async function exportState() {
@@ -464,7 +464,7 @@ function App() {
           <button onClick={fixClipboardNow} disabled={busy}>
             Fix clipboard
           </button>
-          <button onClick={quitApp}>Quit</button>
+          <button onClick={hideToTray}>Hide to tray</button>
         </nav>
 
         <div className="status-block">
@@ -627,6 +627,9 @@ function App() {
               />
               Enable global shortcut
             </label>
+            <p className="hint">
+              Ctrl+Alt+C is also reserved for select all, copy, fix, and paste.
+            </p>
 
             <div className="shortcut-grid">
               <label className="check-row">

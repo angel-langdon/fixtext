@@ -90,6 +90,7 @@ else
   exe_path="./src-tauri/target/debug/fixtext.exe"
 fi
 cache_dir="./src-tauri/target/brfast-v2"
+run_log="./src-tauri/target/fixtext-run.log"
 printf '[brfast] mode: %s\n' "$mode"
 
 timed_bg "stop previous process" sh -c 'taskkill.exe /IM fixtext.exe /F >/dev/null 2>&1 || true'
@@ -101,7 +102,8 @@ wait "$stop_pid"
 wait "$frontend_pid"
 
 ensure_tauri_executable
-timed "launch app" sh -c "\"$exe_path\" >/dev/null 2>&1 &"
+timed "launch app" sh -c "RUST_BACKTRACE=1 \"$exe_path\" >>\"$run_log\" 2>&1 &"
 
 total_end="$(now_ms)"
 printf '[brfast] total: %sms\n' "$((total_end - total_start))"
+printf '[brfast] run log: %s\n' "$run_log"
