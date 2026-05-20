@@ -1,14 +1,17 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    fs,
-    mem::size_of,
+    fs::{self, OpenOptions},
+    io::Write,
+    mem::{size_of, zeroed},
+    panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
-    ptr::{null, null_mut},
+    ptr::{NonNull, null, null_mut},
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering},
     },
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
@@ -22,25 +25,28 @@ use windows_sys::Win32::{
         INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_FLAG_SECURE,
         WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
         WinHttpQueryDataAvailable, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
+        WinHttpSetTimeouts,
     },
     System::{
         DataExchange::{
             CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
         },
-        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
+        Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
         Registry::{
             HKEY, HKEY_CURRENT_USER, KEY_READ, REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteValueW,
             RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
         },
+        Threading::GetCurrentThreadId,
     },
     UI::{
         Input::KeyboardAndMouse::{
-            GetAsyncKeyState, KEYEVENTF_KEYUP, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
-            VK_V, keybd_event,
+            GetAsyncKeyState, KEYEVENTF_KEYUP, VK_A, VK_C, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+            VK_SHIFT, VK_V, keybd_event,
         },
         WindowsAndMessaging::{
-            CallNextHookEx, GetForegroundWindow, GetWindowThreadProcessId, KBDLLHOOKSTRUCT,
-            SetWindowsHookExW, WH_KEYBOARD_LL, WM_KEYDOWN, WM_SYSKEYDOWN,
+            CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
+            KBDLLHOOKSTRUCT, MSG, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+            WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
         },
     },
 };
@@ -50,10 +56,24 @@ const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const GEMINI_HOST: &str = "generativelanguage.googleapis.com";
 const GROQ_HOST: &str = "api.groq.com";
 const CF_UNICODETEXT: u32 = 13;
+const LLKHF_INJECTED: u32 = 0x10;
+const MOD_CTRL: u32 = 0x01;
+const MOD_ALT: u32 = 0x02;
+const MOD_SHIFT: u32 = 0x04;
+const MOD_WIN: u32 = 0x08;
 
 static GLOBAL_APP: OnceLock<AppHandle> = OnceLock::new();
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+static KEYBOARD_HOOK: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
+static KEYBOARD_HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static SHORTCUT_ENABLED: AtomicBool = AtomicBool::new(true);
+static SHORTCUT_VK: AtomicU32 = AtomicU32::new(VK_C as u32);
+static SHORTCUT_MODS: AtomicU32 = AtomicU32::new(MOD_CTRL);
 static SHORTCUT_LAST_TICK: AtomicU64 = AtomicU64::new(0);
 static SHORTCUT_COUNT: AtomicU32 = AtomicU32::new(0);
+static SHORTCUT_PRESSES: AtomicU32 = AtomicU32::new(2);
+static SHORTCUT_WINDOW_MS: AtomicU64 = AtomicU64::new(650);
+static SELECT_ALL_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Serialize, Deserialize)]
 struct ModelChoice {
@@ -212,6 +232,7 @@ fn save_settings(
 ) -> Result<AppViewState, String> {
     validate_settings(&settings)?;
     validate_profiles(&profiles)?;
+    sync_shortcut_settings(&settings);
     save_state_file(
         &app,
         &PersistedState {
@@ -256,6 +277,7 @@ fn import_app_state(
     let imported: PersistedState = serde_json::from_str(&json).map_err(|err| err.to_string())?;
     validate_settings(&imported.settings)?;
     validate_profiles(&imported.profiles)?;
+    sync_shortcut_settings(&imported.settings);
     save_state_file(&app, &imported)?;
     *state
         .settings
@@ -358,13 +380,18 @@ fn hide_main_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
+    log_event("quit requested from UI");
+    uninstall_keyboard_hook();
     app.exit(0);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_logger();
     tauri::Builder::default()
         .setup(|app| {
+            init_log_path(app.handle());
+            log_event("startup");
             let persisted = load_state_file(app.handle()).unwrap_or_else(|_| {
                 let mut settings = default_settings();
                 if let Some(api_key) = load_api_key_from_env_or_file() {
@@ -375,6 +402,8 @@ pub fn run() {
                     profiles: default_profiles(),
                 }
             });
+            log_event("state loaded");
+            sync_shortcut_settings(&persisted.settings);
 
             app.manage(AppState {
                 settings: Mutex::new(persisted.settings.clone()),
@@ -384,12 +413,14 @@ pub fn run() {
             });
 
             install_tray(app.handle())?;
+            log_event("tray installed");
             install_keyboard_hook(app.handle().clone());
-            if !persisted.settings.show_window_on_start {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
+            if !persisted.settings.show_window_on_start
+                && let Some(window) = app.get_webview_window("main")
+            {
+                let _ = window.hide();
             }
+            log_event("setup complete");
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -423,14 +454,49 @@ fn run_exclusive<T>(
     if state.busy.swap(true, Ordering::Acquire) {
         return Err("FixText is already working".to_owned());
     }
-    let result = work();
+    let result = catch_unwind(AssertUnwindSafe(work));
     state.busy.store(false, Ordering::Release);
-    result
+    match result {
+        Ok(result) => result,
+        Err(_) => Err("FixText hit an internal error while working".to_owned()),
+    }
+}
+
+fn install_panic_logger() {
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|location| format!("{}:{}", location.file(), location.line()))
+            .unwrap_or_else(|| "unknown location".to_owned());
+        log_event(format!("panic at {location}: {info}"));
+    }));
+}
+
+fn init_log_path(app: &AppHandle) {
+    if let Ok(dir) = app.path().app_config_dir() {
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("fixtext.log");
+        let _ = LOG_PATH.set(path);
+    }
+}
+
+fn log_event(message: impl AsRef<str>) {
+    let Some(path) = LOG_PATH.get() else {
+        return;
+    };
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_secs();
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{timestamp} {}", message.as_ref());
+    }
 }
 
 fn install_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open FixText", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open])?;
+    let quit = MenuItem::with_id(app, "quit", "Quit FixText", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
 
     let mut builder = TrayIconBuilder::new()
         .menu(&menu)
@@ -449,6 +515,11 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             "open" => {
                 let _ = show_window(app);
             }
+            "quit" => {
+                log_event("quit requested from tray");
+                uninstall_keyboard_hook();
+                app.exit(0);
+            }
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
@@ -460,20 +531,90 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
 
 fn install_keyboard_hook(app: AppHandle) {
     let _ = GLOBAL_APP.set(app.clone());
-    // The hook callback is process-wide and forwards immediately to the next hook.
-    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), null_mut(), 0) };
-    let state = app.state::<AppState>();
-    if hook.is_null() {
-        state.push_activity("error", "Keyboard shortcut hook failed");
-    } else {
-        state.push_activity("saved", "Keyboard shortcut hook installed");
+    if KEYBOARD_HOOK_THREAD_ID.load(Ordering::Acquire) != 0 {
+        log_event("keyboard hook thread already running");
+        return;
     }
+
+    let state_app = app.clone();
+    let state = state_app.state::<AppState>();
+    match thread::Builder::new()
+        .name("fixtext-keyboard-hook".to_owned())
+        .spawn(move || run_keyboard_hook_thread(app))
+    {
+        Ok(_) => {
+            log_event("keyboard hook thread started");
+            state.push_activity("saved", "Keyboard shortcut hook thread started");
+        }
+        Err(err) => {
+            log_event(format!("keyboard hook thread failed: {err}"));
+            state.push_activity("error", "Keyboard shortcut hook thread failed");
+        }
+    }
+}
+
+fn uninstall_keyboard_hook() {
+    let thread_id = KEYBOARD_HOOK_THREAD_ID.load(Ordering::Acquire);
+    if thread_id != 0 {
+        unsafe {
+            let _ = PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
+        }
+        log_event("keyboard hook stop requested");
+    }
+}
+
+fn run_keyboard_hook_thread(app: AppHandle) {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let thread_id = unsafe { GetCurrentThreadId() };
+        KEYBOARD_HOOK_THREAD_ID.store(thread_id, Ordering::Release);
+        log_event(format!(
+            "keyboard hook thread message loop ready id={thread_id}"
+        ));
+
+        // Low-level hooks are delivered through the installing thread's message queue.
+        let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), null_mut(), 0) };
+        let state = app.state::<AppState>();
+        if hook.is_null() {
+            KEYBOARD_HOOK_THREAD_ID.store(0, Ordering::Release);
+            log_event("keyboard hook failed");
+            state.push_activity("error", "Keyboard shortcut hook failed");
+            return;
+        }
+
+        KEYBOARD_HOOK.store(hook, Ordering::Release);
+        log_event("keyboard hook installed");
+        state.push_activity("saved", "Keyboard shortcut hook installed");
+
+        let mut msg: MSG = unsafe { zeroed() };
+        loop {
+            let status = unsafe { GetMessageW(&mut msg, null_mut(), 0, 0) };
+            if status <= 0 {
+                break;
+            }
+        }
+    }));
+
+    if result.is_err() {
+        log_event("keyboard hook thread panicked");
+    }
+
+    let hook = KEYBOARD_HOOK.swap(null_mut(), Ordering::AcqRel);
+    if let Some(hook) = NonNull::new(hook) {
+        unsafe {
+            UnhookWindowsHookEx(hook.as_ptr());
+        }
+        log_event("keyboard hook uninstalled");
+    }
+    KEYBOARD_HOOK_THREAD_ID.store(0, Ordering::Release);
+    log_event("keyboard hook thread exited");
 }
 
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 && (wparam as u32 == WM_KEYDOWN || wparam as u32 == WM_SYSKEYDOWN) {
         let event = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        handle_shortcut_key(event.vkCode);
+        if event.flags & LLKHF_INJECTED == 0 {
+            let _ = catch_unwind(AssertUnwindSafe(|| handle_shortcut_key(event.vkCode)));
+        }
     }
     unsafe { CallNextHookEx(null_mut(), code, wparam, lparam) }
 }
@@ -482,14 +623,16 @@ fn handle_shortcut_key(vk_code: u32) {
     let Some(app) = GLOBAL_APP.get() else {
         return;
     };
-    let state = app.state::<AppState>();
-    let Ok(settings) = state.settings.lock().map(|settings| settings.clone()) else {
+    if !SHORTCUT_ENABLED.load(Ordering::Relaxed) {
         return;
     };
-    if !settings.shortcut_enabled || shortcut_vk(&settings.shortcut_key) != Some(vk_code) {
+    if handle_select_all_shortcut(app, vk_code) {
         return;
     }
-    if !shortcut_modifiers_match(&settings) {
+    if SHORTCUT_VK.load(Ordering::Relaxed) != vk_code {
+        return;
+    }
+    if !shortcut_modifiers_match(SHORTCUT_MODS.load(Ordering::Relaxed)) {
         return;
     }
     if own_window_is_foreground() {
@@ -498,17 +641,19 @@ fn handle_shortcut_key(vk_code: u32) {
 
     let now = monotonic_millis();
     let last = SHORTCUT_LAST_TICK.load(Ordering::Relaxed);
-    let count = if last != 0 && now.saturating_sub(last) <= settings.shortcut_window_ms {
-        SHORTCUT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
-    } else {
-        SHORTCUT_COUNT.store(1, Ordering::Relaxed);
-        1
-    };
+    let count =
+        if last != 0 && now.saturating_sub(last) <= SHORTCUT_WINDOW_MS.load(Ordering::Relaxed) {
+            SHORTCUT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            SHORTCUT_COUNT.store(1, Ordering::Relaxed);
+            1
+        };
     SHORTCUT_LAST_TICK.store(now, Ordering::Relaxed);
 
-    let needed = settings.shortcut_presses.clamp(1, 4);
+    let needed = SHORTCUT_PRESSES.load(Ordering::Relaxed).clamp(1, 4);
     if count == needed {
         SHORTCUT_COUNT.store(0, Ordering::Relaxed);
+        log_event("clipboard shortcut triggered");
         let app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
             std::thread::sleep(Duration::from_millis(90));
@@ -519,6 +664,38 @@ fn handle_shortcut_key(vk_code: u32) {
             }
         });
     }
+}
+
+fn handle_select_all_shortcut(app: &AppHandle, vk_code: u32) -> bool {
+    if vk_code != VK_C as u32
+        || !key_down(VK_CONTROL as i32)
+        || !key_down(VK_MENU as i32)
+        || key_down(VK_SHIFT as i32)
+        || key_down(VK_LWIN as i32)
+        || key_down(VK_RWIN as i32)
+    {
+        return false;
+    }
+    if own_window_is_foreground() {
+        return true;
+    }
+    if SELECT_ALL_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+        log_event("selection shortcut ignored because one is already running");
+        return true;
+    }
+
+    let app = app.clone();
+    log_event("selection shortcut triggered");
+    tauri::async_runtime::spawn_blocking(move || {
+        wait_for_shortcut_release();
+        let state = app.state::<AppState>();
+        match run_exclusive(&state, || fix_selection_inner(&state, Some(&app))) {
+            Ok(_) => state.push_activity("fixed", "Selection fixed from Ctrl+Alt+C"),
+            Err(err) => state.push_activity("error", err),
+        }
+        SELECT_ALL_IN_FLIGHT.store(false, Ordering::Release);
+    });
+    true
 }
 
 fn own_window_is_foreground() -> bool {
@@ -533,11 +710,11 @@ fn own_window_is_foreground() -> bool {
     }
 }
 
-fn shortcut_modifiers_match(settings: &Settings) -> bool {
-    settings.shortcut_ctrl == key_down(VK_CONTROL as i32)
-        && settings.shortcut_alt == key_down(VK_MENU as i32)
-        && settings.shortcut_shift == key_down(VK_SHIFT as i32)
-        && settings.shortcut_win == (key_down(VK_LWIN as i32) || key_down(VK_RWIN as i32))
+fn shortcut_modifiers_match(mods: u32) -> bool {
+    ((mods & MOD_CTRL) != 0) == key_down(VK_CONTROL as i32)
+        && ((mods & MOD_ALT) != 0) == key_down(VK_MENU as i32)
+        && ((mods & MOD_SHIFT) != 0) == key_down(VK_SHIFT as i32)
+        && ((mods & MOD_WIN) != 0) == (key_down(VK_LWIN as i32) || key_down(VK_RWIN as i32))
 }
 
 fn key_down(vk: i32) -> bool {
@@ -549,6 +726,31 @@ fn monotonic_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis() as u64
+}
+
+fn wait_for_shortcut_release() {
+    for _ in 0..35 {
+        if !key_down(VK_CONTROL as i32) && !key_down(VK_MENU as i32) && !key_down(VK_C as i32) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn copy_all_text_to_clipboard() {
+    key_combo(VK_CONTROL as u8, VK_A as u8);
+    std::thread::sleep(Duration::from_millis(90));
+    key_combo(VK_CONTROL as u8, VK_C as u8);
+    std::thread::sleep(Duration::from_millis(180));
+}
+
+fn key_combo(modifier: u8, key: u8) {
+    unsafe {
+        keybd_event(modifier, 0, 0, 0);
+        keybd_event(key, 0, 0, 0);
+        keybd_event(key, 0, KEYEVENTF_KEYUP, 0);
+        keybd_event(modifier, 0, KEYEVENTF_KEYUP, 0);
+    }
 }
 
 fn show_window(app: &AppHandle) -> Result<(), String> {
@@ -565,6 +767,24 @@ fn fix_clipboard_inner(
     state: &State<'_, AppState>,
     app: Option<&AppHandle>,
 ) -> Result<TransformResult, String> {
+    fix_clipboard_inner_with_paste(state, app, false)
+}
+
+fn fix_selection_inner(
+    state: &State<'_, AppState>,
+    app: Option<&AppHandle>,
+) -> Result<TransformResult, String> {
+    emit_status(app, "selecting", "Selecting text");
+    copy_all_text_to_clipboard();
+    fix_clipboard_inner_with_paste(state, app, true)
+}
+
+fn fix_clipboard_inner_with_paste(
+    state: &State<'_, AppState>,
+    app: Option<&AppHandle>,
+    force_paste: bool,
+) -> Result<TransformResult, String> {
+    log_event("fix clipboard started");
     let settings = state
         .settings
         .lock()
@@ -587,11 +807,12 @@ fn fix_clipboard_inner(
     }
     let output = generate_text(app, &settings, &profile.instructions, &input)?;
     write_clipboard(&output)?;
-    if settings.auto_paste {
+    if settings.auto_paste || force_paste {
         emit_status(app, "pasting", "Pasting result");
         paste_clipboard();
     }
     emit_status(app, "done", "Clipboard updated");
+    log_event("fix clipboard finished");
     state.push_activity("fixed", "Clipboard fixed");
     Ok(TransformResult {
         input,
@@ -662,6 +883,35 @@ fn validate_provider_id(provider: &str) -> Result<(), String> {
     }
 }
 
+fn sync_shortcut_settings(settings: &Settings) {
+    let mut mods = 0;
+    if settings.shortcut_ctrl {
+        mods |= MOD_CTRL;
+    }
+    if settings.shortcut_alt {
+        mods |= MOD_ALT;
+    }
+    if settings.shortcut_shift {
+        mods |= MOD_SHIFT;
+    }
+    if settings.shortcut_win {
+        mods |= MOD_WIN;
+    }
+    SHORTCUT_ENABLED.store(settings.shortcut_enabled, Ordering::Release);
+    SHORTCUT_VK.store(
+        shortcut_vk(&settings.shortcut_key).unwrap_or(VK_C as u32),
+        Ordering::Release,
+    );
+    SHORTCUT_MODS.store(mods, Ordering::Release);
+    SHORTCUT_PRESSES.store(settings.shortcut_presses.clamp(1, 4), Ordering::Release);
+    SHORTCUT_WINDOW_MS.store(
+        settings.shortcut_window_ms.clamp(150, 2000),
+        Ordering::Release,
+    );
+    SHORTCUT_LAST_TICK.store(0, Ordering::Release);
+    SHORTCUT_COUNT.store(0, Ordering::Release);
+}
+
 fn selected_provider_id(settings: &Settings) -> String {
     if settings.selected_provider == "groq" {
         "groq".to_owned()
@@ -700,10 +950,9 @@ fn shortcut_vk(key: &str) -> Option<u32> {
     if let Some(number) = key
         .strip_prefix('F')
         .and_then(|value| value.parse::<u32>().ok())
+        && (1..=12).contains(&number)
     {
-        if (1..=12).contains(&number) {
-            return Some(0x70 + number - 1);
-        }
+        return Some(0x70 + number - 1);
     }
     None
 }
@@ -902,10 +1151,10 @@ fn save_state_file(app: &AppHandle, persisted: &PersistedState) -> Result<(), St
 }
 
 fn load_api_key_from_env_or_file() -> Option<String> {
-    if let Ok(value) = std::env::var("GEMINI_API_KEY") {
-        if !value.trim().is_empty() {
-            return Some(value);
-        }
+    if let Ok(value) = std::env::var("GEMINI_API_KEY")
+        && !value.trim().is_empty()
+    {
+        return Some(value);
     }
     let env_paths = [
         std::env::current_dir().ok().map(|path| path.join(".env")),
@@ -937,6 +1186,11 @@ fn generate_text(
     input: &str,
 ) -> Result<String, String> {
     let provider = selected_provider_id(settings);
+    log_event(format!(
+        "generate_text provider={provider} model={} input_chars={}",
+        selected_model_id(settings),
+        input.len()
+    ));
     if provider == "groq" {
         if settings.groq_api_key.trim().is_empty() {
             return Err("Groq API key is missing".to_owned());
@@ -958,14 +1212,14 @@ fn generate_text(
             "max_completion_tokens": settings.max_output_tokens,
             "stream": false
         });
-        if let Some(reasoning_effort) = groq_reasoning_effort(&model) {
-            if let Some(body) = body.as_object_mut() {
-                body.insert("include_reasoning".to_owned(), serde_json::json!(false));
-                body.insert(
-                    "reasoning_effort".to_owned(),
-                    serde_json::json!(reasoning_effort),
-                );
-            }
+        if let Some(reasoning_effort) = groq_reasoning_effort(&model)
+            && let Some(body) = body.as_object_mut()
+        {
+            body.insert("include_reasoning".to_owned(), serde_json::json!(false));
+            body.insert(
+                "reasoning_effort".to_owned(),
+                serde_json::json!(reasoning_effort),
+            );
         }
         emit_status(app, "sent", "Sent request to Groq");
         let response = post_groq(&settings.groq_api_key, &body.to_string())?;
@@ -1125,6 +1379,7 @@ fn post_json(
         if session.is_null() {
             return Err("WinHttpOpen failed".to_owned());
         }
+        WinHttpSetTimeouts(session, 15_000, 15_000, 30_000, 60_000);
         let connect = WinHttpConnect(session, host.as_ptr(), INTERNET_DEFAULT_HTTPS_PORT, 0);
         if connect.is_null() {
             WinHttpCloseHandle(session);
@@ -1157,6 +1412,7 @@ fn post_json(
             WinHttpCloseHandle(request);
             WinHttpCloseHandle(connect);
             WinHttpCloseHandle(session);
+            log_event(format!("{service} request failed"));
             return Err(format!("{service} request failed"));
         }
         loop {
@@ -1165,6 +1421,7 @@ fn post_json(
                 WinHttpCloseHandle(request);
                 WinHttpCloseHandle(connect);
                 WinHttpCloseHandle(session);
+                log_event("WinHttpQueryDataAvailable failed");
                 return Err("WinHttpQueryDataAvailable failed".to_owned());
             }
             if available == 0 {
@@ -1183,6 +1440,7 @@ fn post_json(
                 WinHttpCloseHandle(request);
                 WinHttpCloseHandle(connect);
                 WinHttpCloseHandle(session);
+                log_event("WinHttpReadData failed");
                 return Err("WinHttpReadData failed".to_owned());
             }
             response.truncate(start + read as usize);
@@ -1197,30 +1455,35 @@ fn post_json(
 
 fn read_clipboard() -> Result<String, String> {
     // Clipboard ownership and global-memory access are OS contracts; this block copies the text out.
-    unsafe {
-        if OpenClipboard(null_mut::<std::ffi::c_void>() as HWND) == 0 {
-            return Err("Could not open clipboard".to_owned());
-        }
+    let text = unsafe {
+        open_clipboard_with_retry()?;
         let handle = GetClipboardData(CF_UNICODETEXT);
         if handle.is_null() {
             CloseClipboard();
             return Err("Clipboard does not contain Unicode text".to_owned());
+        }
+        let byte_len = GlobalSize(handle as HGLOBAL);
+        if byte_len < size_of::<u16>() {
+            CloseClipboard();
+            return Err("Clipboard text size is unavailable".to_owned());
         }
         let locked = GlobalLock(handle as HGLOBAL) as *const u16;
         if locked.is_null() {
             CloseClipboard();
             return Err("Could not lock clipboard memory".to_owned());
         }
-        let mut len = 0usize;
-        while *locked.add(len) != 0 {
-            len += 1;
-        }
-        let slice = std::slice::from_raw_parts(locked, len);
-        let text = String::from_utf16(slice).map_err(|err| err.to_string());
+        let max_units = byte_len / size_of::<u16>();
+        let slice = std::slice::from_raw_parts(locked, max_units);
+        let len = slice
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(max_units);
+        let copy = slice[..len].to_vec();
         GlobalUnlock(handle as HGLOBAL);
         CloseClipboard();
-        text
-    }
+        copy
+    };
+    String::from_utf16(&text).map_err(|err| err.to_string())
 }
 
 fn write_clipboard(text: &str) -> Result<(), String> {
@@ -1242,9 +1505,9 @@ fn write_clipboard(text: &str) -> Result<(), String> {
         locked.copy_from_nonoverlapping(wide.as_ptr(), wide.len());
         GlobalUnlock(mem);
 
-        if OpenClipboard(null_mut::<std::ffi::c_void>() as HWND) == 0 {
+        if let Err(err) = open_clipboard_with_retry() {
             GlobalFree(mem);
-            return Err("Could not open clipboard".to_owned());
+            return Err(err);
         }
         if EmptyClipboard() == 0 {
             CloseClipboard();
@@ -1259,6 +1522,18 @@ fn write_clipboard(text: &str) -> Result<(), String> {
         CloseClipboard();
     }
     Ok(())
+}
+
+unsafe fn open_clipboard_with_retry() -> Result<(), String> {
+    for attempt in 0..12 {
+        if unsafe { OpenClipboard(null_mut::<std::ffi::c_void>() as HWND) } != 0 {
+            return Ok(());
+        }
+        if attempt < 11 {
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+    Err("Could not open clipboard".to_owned())
 }
 
 fn paste_clipboard() {
@@ -1331,13 +1606,9 @@ fn disable_startup() -> Result<(), String> {
         if status != ERROR_SUCCESS {
             return Err("Could not open Windows startup registry key".to_owned());
         }
-        let result = RegDeleteValueW(key, wide_null(APP_NAME).as_ptr());
+        let _result = RegDeleteValueW(key, wide_null(APP_NAME).as_ptr());
         RegCloseKey(key);
-        if result == ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
