@@ -4,6 +4,12 @@ Configurable Windows clipboard rewrite utility built with Tauri 2, Rust, React, 
 
 ![FixText app](docs/fixtext-app.png)
 
+## What it does
+
+FixText is a small Windows tray app for rewriting text with an LLM without leaving the app you are typing in. It watches for a global keyboard shortcut, copies the current text, sends it to the selected model with your prompt profile, writes the corrected result back to the clipboard, and can paste it automatically.
+
+The default fresh setup uses Groq with Llama 3.3 70B and one `Fix` prompt focused on minimal spelling, grammar, punctuation, and wording corrections while preserving the original language and tone.
+
 ## Features
 
 - Native Windows tray icon: double-click opens the frontend; the frontend owns app actions.
@@ -26,13 +32,25 @@ bun run tauri dev
 
 ## Build
 
-For the portable release executable:
+Install the JavaScript dependencies first:
+
+```powershell
+bun install
+```
+
+Create the portable release binary with:
 
 ```powershell
 bun run build:app
 ```
 
 This writes the standalone app to `src-tauri/target/release/fixtext.exe` and skips setup/MSI packaging.
+
+Run the binary directly from PowerShell or Explorer:
+
+```powershell
+.\src-tauri\target\release\fixtext.exe
+```
 
 For a quick debug executable without installer packaging:
 
