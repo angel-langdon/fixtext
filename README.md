@@ -1,35 +1,62 @@
 # FixText
 
-A simple Python utility to modify clipboard text using AI text transformations.
-
-## Description
-
-FixText is a command-line tool that takes text from your clipboard, transforms it according to selected style options, and places the modified text back in your clipboard.
+Configurable Windows clipboard rewrite utility built with Tauri 2, Rust, React, TypeScript, Vite, and Bun.
 
 ## Features
 
-- **Four text transformation styles:**
-  1. Formal - Clean, well-written, and formal language
-  2. Cult - Elevated, sophisticated language with complex vocabulary
-  3. Valle Inclán - Mimics the style of Spanish writer Valle Inclán
-  4. Non Sense - Creates playful, illogical word combinations
+- Native Windows tray icon: double-click opens the frontend; the frontend owns app actions.
+- Editable Gemini model selection with free-tier defaults and a custom model id field.
+- Editable prompt profiles with add, duplicate, delete, and structured save.
+- Full app-state import/export JSON for settings, prompts, model choice, and API key.
+- Local persistent state in the OS app config directory, not in the repository.
+- Global shortcuts can fix the current clipboard, or use `Ctrl+Alt+C` to select all text in the active app, copy it, rewrite it, and paste the result back.
+- Minimal dependencies: official Tauri/React/Vite scaffold, `windows-sys`, `serde`, and `serde_json`.
 
-## Requirements
+## Development
 
-- uv
-- A free tier GEMINI API KEY [from Google AI Studio](https://aistudio.google.com/apikey) inside `.env` file. `GEMINI_API_KEY=...`
+```powershell
+bun install
+bun run tauri dev
+```
 
-## Usage
+`localhost:1420` is only used by `tauri dev`. If you open the release executable directly, it should not need a localhost server.
 
-1. Copy text to your clipboard
-2. Run the script: `uv run fixtext.py`
-3. Select a formatting option
-4. The transformed text will be placed in your clipboard, ready to paste
+## Build
 
-## Keyboard Shortcut (Optional)
+For the portable release executable:
 
-![PowerToys Keyboard Shortcut](img/powertoys-keyboard-shortcut.png)
+```powershell
+bun run build:app
+```
 
-You can set up a keyboard shortcut using tools like PowerToys to quickly access FixText.
+This writes the standalone app to `src-tauri/target/release/fixtext.exe` and skips setup/MSI packaging.
 
-Ubuntu keyboard shortcut `gnome-terminal -- bash -c 'cd ~/projects/fixtext && uv run fixtext.py'` on keyboard custom shortcuts.
+For a quick debug executable without installer packaging:
+
+```powershell
+bun run build:fast
+```
+
+To build Windows installers:
+
+```powershell
+bun run build:installer
+```
+
+To rebuild and launch that standalone executable:
+
+```powershell
+bash brfast.sh
+```
+
+`brfast.sh` defaults to a release-profile standalone executable. To use a debug-profile executable for faster iteration:
+
+```powershell
+bash brfast.sh -d
+```
+
+Rust stable is used through `rustup`; update with:
+
+```powershell
+rustup update stable
+```
