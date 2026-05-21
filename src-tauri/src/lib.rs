@@ -5,7 +5,7 @@ use std::{
     io::Write,
     mem::{size_of, zeroed},
     panic::{AssertUnwindSafe, catch_unwind},
-    path::PathBuf,
+    path::{Path, PathBuf},
     ptr::{NonNull, null, null_mut},
     sync::{
         Mutex, OnceLock,
@@ -63,9 +63,10 @@ const MOD_SHIFT: u32 = 0x04;
 const MOD_WIN: u32 = 0x08;
 
 static GLOBAL_APP: OnceLock<AppHandle> = OnceLock::new();
-static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+static LOG_PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 static KEYBOARD_HOOK: AtomicPtr<std::ffi::c_void> = AtomicPtr::new(null_mut());
 static KEYBOARD_HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static HEALTH_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
 static SHORTCUT_ENABLED: AtomicBool = AtomicBool::new(true);
 static SHORTCUT_VK: AtomicU32 = AtomicU32::new(VK_C as u32);
 static SHORTCUT_MODS: AtomicU32 = AtomicU32::new(MOD_CTRL);
@@ -415,6 +416,7 @@ pub fn run() {
             install_tray(app.handle())?;
             log_event("tray installed");
             install_keyboard_hook(app.handle().clone());
+            start_health_logger();
             if !persisted.settings.show_window_on_start
                 && let Some(window) = app.get_webview_window("main")
             {
@@ -473,23 +475,92 @@ fn install_panic_logger() {
 }
 
 fn init_log_path(app: &AppHandle) {
+    let mut paths = Vec::new();
     if let Ok(dir) = app.path().app_config_dir() {
         let _ = fs::create_dir_all(&dir);
-        let path = dir.join("fixtext.log");
-        let _ = LOG_PATH.set(path);
+        paths.push(dir.join("fixtext.log"));
     }
+    for path in project_error_log_paths() {
+        if !paths.iter().any(|existing| existing == &path) {
+            paths.push(path);
+        }
+    }
+    let _ = LOG_PATHS.set(paths);
+    log_event("logging initialized");
 }
 
 fn log_event(message: impl AsRef<str>) {
-    let Some(path) = LOG_PATH.get() else {
+    let Some(paths) = LOG_PATHS.get() else {
         return;
     };
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_secs();
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{timestamp} {}", message.as_ref());
+    let process_id = std::process::id();
+    let thread_id = format!("{:?}", thread::current().id());
+    for path in paths {
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(
+                file,
+                "{timestamp} pid={process_id} tid={thread_id} {}",
+                message.as_ref()
+            );
+        }
+    }
+}
+
+fn project_error_log_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir()
+        && let Some(path) = project_error_log_path_from(&current_dir)
+    {
+        paths.push(path);
+    }
+    if let Ok(current_exe) = std::env::current_exe() {
+        for ancestor in current_exe.ancestors() {
+            if let Some(path) = project_error_log_path_from(ancestor)
+                && !paths.iter().any(|existing| existing == &path)
+            {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
+fn project_error_log_path_from(path: &Path) -> Option<PathBuf> {
+    if path.join("package.json").is_file() && path.join("src-tauri").is_dir() {
+        Some(path.join("error.log"))
+    } else {
+        None
+    }
+}
+
+fn start_health_logger() {
+    if HEALTH_LOGGER_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    match thread::Builder::new()
+        .name("fixtext-health-log".to_owned())
+        .spawn(|| {
+            loop {
+                thread::sleep(Duration::from_secs(60));
+                let hook_thread_id = KEYBOARD_HOOK_THREAD_ID.load(Ordering::Relaxed);
+                let hook_installed = !KEYBOARD_HOOK.load(Ordering::Relaxed).is_null();
+                log_event(format!(
+                    "heartbeat hook_thread_id={hook_thread_id} hook_installed={hook_installed}"
+                ));
+            }
+        }) {
+        Ok(_) => log_event("health logger started"),
+        Err(err) => {
+            HEALTH_LOGGER_STARTED.store(false, Ordering::Release);
+            log_event(format!("health logger failed: {err}"));
+        }
     }
 }
 

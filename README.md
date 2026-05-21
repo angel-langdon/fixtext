@@ -49,10 +49,10 @@ To rebuild and launch that standalone executable:
 bash brfast.sh
 ```
 
-`brfast.sh` defaults to a debug-profile standalone executable for faster iteration. To force a release-profile executable:
+`brfast.sh` defaults to a release-profile standalone executable. To use a debug-profile executable for faster iteration:
 
 ```powershell
-$env:BRFAST_MODE="release"; bash brfast.sh
+bash brfast.sh -d
 ```
 
 Rust stable is used through `rustup`; update with:

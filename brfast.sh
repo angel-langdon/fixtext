@@ -80,14 +80,43 @@ ensure_tauri_executable() {
   fi
 }
 
+usage() {
+  printf 'Usage: bash brfast.sh [-d|--debug]\n'
+}
+
+mode="release"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -d | --debug)
+    mode="debug"
+    ;;
+  -r | --release)
+    mode="release"
+    ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  *)
+    printf '[brfast] unknown option: %s\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+  esac
+  shift
+done
+
 total_start="$(now_ms)"
-mode="${BRFAST_MODE:-debug}"
 if [ "$mode" = "release" ]; then
   cargo_cmd="cargo build --manifest-path src-tauri/Cargo.toml --release --features tauri/custom-protocol"
   exe_path="./src-tauri/target/release/fixtext.exe"
-else
+elif [ "$mode" = "debug" ]; then
   cargo_cmd="cargo build --manifest-path src-tauri/Cargo.toml --features tauri/custom-protocol"
   exe_path="./src-tauri/target/debug/fixtext.exe"
+else
+  printf '[brfast] invalid mode: %s\n' "$mode" >&2
+  usage >&2
+  exit 2
 fi
 cache_dir="./src-tauri/target/brfast-v2"
 run_log="./src-tauri/target/fixtext-run.log"
@@ -102,8 +131,9 @@ wait "$stop_pid"
 wait "$frontend_pid"
 
 ensure_tauri_executable
-timed "launch app" sh -c "RUST_BACKTRACE=1 \"$exe_path\" >>\"$run_log\" 2>&1 &"
+timed "launch app" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "\$env:RUST_BACKTRACE='1'; Start-Process -FilePath (Resolve-Path '$exe_path') -WorkingDirectory (Resolve-Path '.') -WindowStyle Hidden"
 
 total_end="$(now_ms)"
 printf '[brfast] total: %sms\n' "$((total_end - total_start))"
 printf '[brfast] run log: %s\n' "$run_log"
+printf '[brfast] error log: %s\n' "./error.log"

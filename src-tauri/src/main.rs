@@ -1,5 +1,5 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Prevents a console window from owning the app process on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
 
 fn main() {
     fixtext_lib::run()
