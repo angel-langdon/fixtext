@@ -1125,27 +1125,11 @@ fn default_models() -> Vec<ModelChoice> {
 }
 
 fn default_profiles() -> Vec<PromptProfile> {
-    let common = "Corrige el texto de forma minima.\nArregla solo errores claros de ortografia, gramatica, puntuacion, concordancia u orden.\nConserva las palabras, estructura, tono e intencion originales siempre que sea posible.\nSi ya esta bien, devuelve practicamente lo mismo.\nMismo idioma. Espanol: Castellano de Espana.\nSin explicaciones, comentarios ni comillas.";
     vec![
         PromptProfile {
             id: "fix".to_owned(),
             title: "Fix".to_owned(),
-            instructions: common.to_owned(),
-        },
-        PromptProfile {
-            id: "formal".to_owned(),
-            title: "Formal".to_owned(),
-            instructions: format!("{common}\n- Haz que el mensaje sea formal, manteniendo el estilo original."),
-        },
-        PromptProfile {
-            id: "markdown".to_owned(),
-            title: "Markdown".to_owned(),
-            instructions: "Fix any errors in the Markdown formatting of the text.\nAdd proper headings, lists, and formatting to make it more readable and structured.\nOnly return the modified Markdown text without explanations.".to_owned(),
-        },
-        PromptProfile {
-            id: "english".to_owned(),
-            title: "Formal English".to_owned(),
-            instructions: format!("{common}\n- Answer in English with a formal but natural tone."),
+            instructions: "Corrige el texto de forma minima.\nArregla solo errores claros de ortografia, gramatica, puntuacion, concordancia u orden.  Añade puntos, comas, interrogantes o exclamaciones si hace falta.\nConserva las palabras, estructura, tono e intencion originales siempre que sea posible.\nSi ya esta bien, devuelve practicamente lo mismo.\nRespeta el mismo idioma si es inglés, inglés, si es español: Castellano de Espana.\nSin explicaciones, comentarios ni comillas.".to_owned(),
         },
     ]
 }
@@ -1155,7 +1139,7 @@ fn default_settings() -> Settings {
         selected_provider: default_provider(),
         api_key: String::new(),
         groq_api_key: String::new(),
-        selected_model: "gemini-3.1-flash-lite".to_owned(),
+        selected_model: "llama-3.3-70b-versatile".to_owned(),
         custom_model: String::new(),
         selected_profile: "fix".to_owned(),
         max_output_tokens: 512,
@@ -1176,7 +1160,7 @@ fn default_settings() -> Settings {
 }
 
 fn default_provider() -> String {
-    "gemini".to_owned()
+    "groq".to_owned()
 }
 
 fn default_status_overlay_enabled() -> bool {
